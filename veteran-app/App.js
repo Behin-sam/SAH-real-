@@ -411,15 +411,30 @@ export default function App() {
       <View style={Platform.OS === 'web' ? {
         flex: 1,
         width: '100%',
-        maxWidth: 520,
-        alignSelf: 'center',
         height: '100%',
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#171412',
+        alignItems: 'center',
+        justifyContent: 'center',
       } : { flex: 1 }}>
-        <NavigationContainer>
-          <StatusBar style="light" />
-          {user ? <MainStack /> : <AuthStack />}
-        </NavigationContainer>
+        <View style={Platform.OS === 'web' ? {
+          flex: 1,
+          width: '100%',
+          maxWidth: 460,
+          height: '100%',
+          backgroundColor: '#FFFFFF',
+          alignSelf: 'center',
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: 0.35,
+          shadowRadius: 28,
+          elevation: 12,
+          overflow: 'hidden',
+        } : { flex: 1 }}>
+          <NavigationContainer>
+            <StatusBar style="light" />
+            {user ? <MainStack /> : <AuthStack />}
+          </NavigationContainer>
+        </View>
       </View>
     </AuthContext.Provider>
   );
