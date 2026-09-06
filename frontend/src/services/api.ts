@@ -1,28 +1,58 @@
 /**
  * API Service for VALOR Web Frontend
- * Communicates with FastAPI backend at http://localhost:8000/api
+ * Communicates with FastAPI backend with auto dual-port resolution (8000 / 8001)
  */
 
-const API_BASE_URL = 'http://localhost:8001/api';
+const BASE_URLS = ['http://localhost:8000/api', 'http://localhost:8001/api', 'http://127.0.0.1:8000/api'];
+let workingBaseUrl = BASE_URLS[0];
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   };
 
+  // Try current workingBaseUrl first
   try {
+    const url = `${workingBaseUrl}${endpoint}`;
     const response = await fetch(url, { ...options, headers });
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API error ${response.status}: ${errorText}`);
+    if (response.ok) {
+      return (await response.json()) as T;
     }
-    return (await response.json()) as T;
-  } catch (error) {
-    console.warn(`[Backend API] Request to ${endpoint} failed:`, error);
-    throw error;
+    // If not OK, but reached server (e.g. 401, 404, 400), throw proper message
+    if (response.status === 401 || response.status === 400 || response.status === 403 || response.status === 404) {
+      const errJson = await response.json().catch(() => ({ detail: 'Request failed' }));
+      throw new Error(errJson.detail || `Error ${response.status}`);
+    }
+  } catch (error: any) {
+    if (error?.message && !error.message.includes('Failed to fetch') && !error.message.includes('NetworkError')) {
+      throw error;
+    }
   }
+
+  // Try alternate base URLs if network connection failed
+  for (const base of BASE_URLS) {
+    if (base === workingBaseUrl) continue;
+    try {
+      const url = `${base}${endpoint}`;
+      const response = await fetch(url, { ...options, headers });
+      if (response.ok) {
+        workingBaseUrl = base;
+        return (await response.json()) as T;
+      }
+      if (response.status === 401 || response.status === 400 || response.status === 403 || response.status === 404) {
+        workingBaseUrl = base;
+        const errJson = await response.json().catch(() => ({ detail: 'Request failed' }));
+        throw new Error(errJson.detail || `Error ${response.status}`);
+      }
+    } catch (err: any) {
+      if (err?.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError')) {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error(`Unable to reach backend service on ${workingBaseUrl}`);
 }
 
 export const apiService = {
@@ -31,10 +61,10 @@ export const apiService = {
     return request<{ veterans: any[]; counselors: any[] }>('/auth/demo-users');
   },
 
-  async login(email: string, role: string) {
+  async login(email: string, role: string, password?: string) {
     return request<{ success: boolean; token: string; user: any }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, role }),
+      body: JSON.stringify({ email, role, password }),
     });
   },
 
@@ -42,6 +72,7 @@ export const apiService = {
     name: string;
     email: string;
     role: string;
+    password?: string;
     rank?: string;
     unit?: string;
     service_branch?: string;
@@ -50,6 +81,7 @@ export const apiService = {
     credentials?: string;
     institution?: string;
     phone?: string;
+    avatar_url?: string;
   }) {
     return request<{ success: boolean; user: any }>('/auth/register', {
       method: 'POST',
@@ -129,10 +161,15 @@ export const apiService = {
     return request<any[]>(`/veterans/${veteranId}/tasks${query}`);
   },
 
-  async completeTask(veteranId: string, taskId: string) {
+  async completeTask(veteranId: string, taskId: string, reflectionNotes?: string) {
     return request<any>(`/veterans/${veteranId}/tasks/${taskId}/complete`, {
       method: 'POST',
+      body: JSON.stringify({ notes: reflectionNotes }),
     });
+  },
+
+  async getLatestAssessment(veteranId: string) {
+    return request<any>(`/veterans/${veteranId}/assessment`);
   },
 
   async submitAssessment(veteranId: string, answers: { question_id?: number; value: number }[]) {
@@ -251,8 +288,9 @@ export const apiService = {
     return request<any>(`/groups/${groupId}/messages?${query}`, { method: 'POST' });
   },
 
-  async likeGroupMessage(groupId: string, messageId: string) {
-    return request<any>(`/groups/${groupId}/messages/${messageId}/like`, { method: 'POST' });
+  async likeGroupMessage(groupId: string, messageId: string, veteranId?: string) {
+    const query = veteranId ? `?veteran_id=${encodeURIComponent(veteranId)}` : '';
+    return request<any>(`/groups/${groupId}/messages/${messageId}/like${query}`, { method: 'POST' });
   },
 
   async createGroupActivity(groupId: string, data: { title: string; description?: string; activity_type?: string; points_per_participant?: number; created_by?: string; scheduled_at?: string; duration_minutes?: number }) {
@@ -315,7 +353,7 @@ export const apiService = {
   // Health check
   async checkHealth(): Promise<boolean> {
     try {
-      const res = await fetch('http://127.0.0.1:8001/health');
+      const res = await fetch(`${workingBaseUrl.replace('/api', '')}/health`);
       return res.ok;
     } catch {
       return false;

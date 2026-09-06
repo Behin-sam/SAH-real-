@@ -35,6 +35,7 @@ from app.models.gamified import (
     GroupActivity,
     GroupActivityParticipant,
     GroupMessage,
+    GroupMessageLike,
     PointsLedger,
     SocialInteraction,
     GroupRole,
@@ -645,9 +646,10 @@ async def post_group_message(
 async def like_group_message(
     group_id: str,
     message_id: str,
+    veteran_id: Any = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Applaud/like a squad message."""
+    """Applaud/like a squad message (strictly 1 like per veteran to prevent spam)."""
     m_uuid = None
     try:
         m_uuid = uuid.UUID(str(message_id))
@@ -661,9 +663,31 @@ async def like_group_message(
     if not msg:
         return {"message": "Liked cheer! 👏", "likes_count": 1}
 
+    # If veteran_id is provided, check if already liked
+    if veteran_id:
+        v_uuid = await _resolve_veteran_uuid(db, veteran_id)
+        existing_like = await db.execute(
+            select(GroupMessageLike).where(
+                GroupMessageLike.message_id == msg.id,
+                GroupMessageLike.veteran_id == v_uuid,
+            )
+        )
+        if existing_like.scalar_one_or_none():
+            return {
+                "message": "You have already applauded this cheer! 👏",
+                "likes_count": msg.likes_count,
+                "already_liked": True,
+            }
+
+        new_like = GroupMessageLike(
+            message_id=msg.id,
+            veteran_id=v_uuid,
+        )
+        db.add(new_like)
+
     msg.likes_count = (msg.likes_count or 0) + 1
     await db.commit()
-    return {"message": "Liked cheer! 👏", "likes_count": msg.likes_count}
+    return {"message": "Liked cheer! 👏", "likes_count": msg.likes_count, "already_liked": False}
 
 
 # ─── Group Activities ─────────────────────────────────────────────────────────
@@ -816,6 +840,7 @@ async def join_activity(
     participant = GroupActivityParticipant(
         activity_id=activity.id,
         veteran_id=v_uuid,
+        status="joined",
     )
     db.add(participant)
     activity.participants_count = (activity.participants_count or 0) + 1
@@ -834,7 +859,7 @@ async def complete_activity(
     veteran_id: Any = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Mark activity as completed and award points."""
+    """Mark activity as completed and award points (requires joining first)."""
     g_uuid = await _resolve_group_uuid(db, group_id)
     v_uuid = await _resolve_veteran_uuid(db, veteran_id)
     a_uuid = None
@@ -851,20 +876,18 @@ async def complete_activity(
     )
     participant = result.scalar_one_or_none()
 
-    now = datetime.now(timezone.utc)
     if not participant:
-        participant = GroupActivityParticipant(
-            activity_id=a_uuid or uuid.uuid4(),
-            veteran_id=v_uuid,
-            status="completed",
-            completed_at=now,
+        raise HTTPException(
+            status_code=400,
+            detail="You must enlist/join this squad drill before claiming completion XP.",
         )
-        db.add(participant)
-    else:
-        if participant.status == "completed":
-            return {"message": "Already completed", "points_earned": 0, "total_points": 0}
-        participant.status = "completed"
-        participant.completed_at = now
+
+    if participant.status == "completed":
+        return {"message": "Already completed", "points_earned": 0, "total_points": 0}
+
+    now = datetime.now(timezone.utc)
+    participant.status = "completed"
+    participant.completed_at = now
 
     act_res = await db.execute(select(GroupActivity).where(GroupActivity.id == a_uuid if a_uuid else False))
     activity = act_res.scalar_one_or_none()

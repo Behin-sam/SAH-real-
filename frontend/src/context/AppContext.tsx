@@ -6,11 +6,12 @@ import { apiService } from '../services/api';
 interface AppContextType {
   // Authentication & Role
   currentUser: User | null;
+  setCurrentUser: React.Dispatch<React.SetStateAction<User | null>>;
   isAuthenticated: boolean;
   currentRole: UserRole;
   setRole: (role: UserRole) => void;
-  loginWithCredentials: (email: string, role: UserRole) => void;
-  registerNewUser: (userData: Omit<User, 'id' | 'avatarUrl' | 'isEmailVerified'>) => void;
+  loginWithCredentials: (email: string, role: UserRole, password?: string) => Promise<any>;
+  registerNewUser: (userData: any) => void;
   verifyEmailCode: (email: string, code: string) => boolean;
   logout: () => void;
 
@@ -24,6 +25,7 @@ interface AppContextType {
   currentVeteranUser: User;
   currentVeteranProfile: VeteranProfile;
   allVeterans: { user: User; profile: VeteranProfile }[];
+  setAllVeterans: React.Dispatch<React.SetStateAction<{ user: User; profile: VeteranProfile }[]>>;
   assignedVeterans: { user: User; profile: VeteranProfile }[];
   tasks: Task[];
   metrics: DailyMetrics[];
@@ -323,10 +325,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Auth Methods
-  const loginWithCredentials = async (email: string, role: UserRole) => {
+  const loginWithCredentials = async (email: string, role: UserRole, password?: string) => {
     if (role === 'counselor') {
       try {
-        const res = await apiService.login(email, 'counselor');
+        const res = await apiService.login(email, 'counselor', password);
         if (res?.user) {
           setCurrentUser(res.user);
           setCurrentRole('counselor');
@@ -334,38 +336,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setActiveScreen('dashboard-overview');
           localStorage.setItem('sah_active_user', JSON.stringify(res.user));
           localStorage.setItem('sah_active_role', 'counselor');
-          return;
+          return { success: true };
         }
-      } catch (e) {
-        console.warn('Counselor login fallback:', e);
+      } catch (e: any) {
+        if (e?.message && (e.message.includes('401') || e.message.includes('Invalid') || e.message.includes('not found') || e.message.includes('credentials'))) {
+          throw new Error(e.message || 'Invalid counselor credentials.');
+        }
       }
       const emailLower = (email || '').toLowerCase();
-      const isDemoNair = emailLower.includes('nair') || emailLower.includes('ananya') || !email;
-      const cleanName = isDemoNair
-        ? CURRENT_COUNSELOR.name
-        : email.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()).replace(/^(?!Dr\b)/, 'Dr. ');
-      const fallbackCounselor: User = isDemoNair ? CURRENT_COUNSELOR : {
-        id: `counselor-${Date.now()}`,
-        name: cleanName,
-        email: email,
-        role: 'counselor',
-        rank: 'Clinical Specialist',
-        title: 'Licensed Clinical Counselor',
-        specialization: 'Trauma & PTSD Recovery',
-        credentials: 'PhD, LCSW',
-        institution: 'Amrita Health & Rehabilitation',
-        avatarUrl: 'https://images.unsplash.com/photo-1594824813566-88855ce78905?auto=format&fit=crop&q=80&w=200',
-        isEmailVerified: true,
-      };
-      setCurrentUser(fallbackCounselor);
-      setCurrentRole('counselor');
-      setIsAuthenticated(true);
-      setActiveScreen('dashboard-overview');
-      localStorage.setItem('sah_active_user', JSON.stringify(fallbackCounselor));
-      localStorage.setItem('sah_active_role', 'counselor');
+      const isDemoNair = emailLower.includes('nair') || emailLower.includes('ananya');
+      if (isDemoNair) {
+        setCurrentUser(CURRENT_COUNSELOR);
+        setCurrentRole('counselor');
+        setIsAuthenticated(true);
+        setActiveScreen('dashboard-overview');
+        localStorage.setItem('sah_active_user', JSON.stringify(CURRENT_COUNSELOR));
+        localStorage.setItem('sah_active_role', 'counselor');
+        return { success: true };
+      }
+      throw new Error('Unregistered counselor email. Please check your credentials or register an account.');
     } else {
       try {
-        const res = await apiService.login(email, 'veteran');
+        const res = await apiService.login(email, 'veteran', password);
         if (res?.user) {
           const u = res.user;
           const userObj: User = {
@@ -435,22 +427,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               setTasksMap(prev => ({ ...prev, [u.id]: liveTasks }));
             }
           } catch (e) {}
-          return;
+          return { success: true };
         }
-      } catch (err) {
-        console.warn('Backend login fallback:', err);
+      } catch (err: any) {
+        if (err?.message && (err.message.includes('401') || err.message.includes('Invalid') || err.message.includes('not found') || err.message.includes('credentials'))) {
+          throw new Error(err.message || 'Invalid veteran email or password.');
+        }
       }
 
-      // Fallback to local match if backend offline
-      const match = allVeterans.find(v => v.user.email.toLowerCase() === email.toLowerCase()) || allVeterans[0];
-      setCurrentUser(match.user);
-      setCurrentRole('veteran');
-      setActiveVeteranId(match.user.id);
-      setIsAuthenticated(true);
-      setActiveScreen('home');
-      localStorage.setItem('sah_active_user', JSON.stringify(match.user));
-      localStorage.setItem('sah_active_role', 'veteran');
-      localStorage.setItem('sah_active_veteran_id', match.user.id);
+      // Check registered / demo veterans only
+      const match = allVeterans.find(v => v.user.email.toLowerCase() === email.toLowerCase());
+      if (match) {
+        setCurrentUser(match.user);
+        setCurrentRole('veteran');
+        setActiveVeteranId(match.user.id);
+        setIsAuthenticated(true);
+        setActiveScreen('home');
+        localStorage.setItem('sah_active_user', JSON.stringify(match.user));
+        localStorage.setItem('sah_active_role', 'veteran');
+        localStorage.setItem('sah_active_veteran_id', match.user.id);
+        return { success: true };
+      }
+
+      throw new Error('Unregistered account. Please check your email or click "Register Account".');
     }
   };
 
@@ -1003,6 +1002,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         currentUser,
+        setCurrentUser,
         isAuthenticated,
         currentRole,
         setRole,
@@ -1017,6 +1017,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentVeteranUser,
         currentVeteranProfile,
         allVeterans,
+        setAllVeterans,
         assignedVeterans,
         triggerEmergencyAlert,
         tasks,

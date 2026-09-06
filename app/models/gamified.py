@@ -404,6 +404,20 @@ class GroupMessage(Base):
     sender = relationship("VeteranProfile")
 
 
+class GroupMessageLike(Base):
+    """Tracks veteran applause/likes on squad messages to enforce 1 like per veteran."""
+    __tablename__ = "group_message_likes"
+    __table_args__ = (
+        UniqueConstraint("message_id", "veteran_id", name="uq_msg_vet_like"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id = Column(UUID(as_uuid=True), ForeignKey("group_messages.id"), nullable=False)
+    veteran_id = Column(UUID(as_uuid=True), ForeignKey("veteran_profiles.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+
 # ─── Points & Rewards ─────────────────────────────────────────────────────────
 
 class PointsLedger(Base):
