@@ -1,32 +1,79 @@
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Send, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { MessageCircle, Send, ShieldAlert } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { apiService } from '../../services/api';
 
+const DEFAULT_GREETING = (counselorName: string) => ({
+  id: 'msg-init-counselor',
+  sender_type: 'counselor',
+  content: `Hello! I'm ${counselorName || 'Dr. Ananya Nair'}, your clinical supervisor. Feel free to reach out here anytime for support, grounding guidance, or care plan adjustments.`,
+  created_at: new Date(Date.now() - 3600000).toISOString(),
+});
+
 export const CommunicationHubView: React.FC = () => {
-  const { currentVeteranUser, counselorNotes, addCounselorNote, activeVeteranId } = useApp();
+  const { currentVeteranUser, counselorNotes, addCounselorNote, activeVeteranId, currentUser } = useApp();
   const [noteText, setNoteText] = useState('');
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [replyText, setReplyText] = useState('');
-  const [loadingChat, setLoadingChat] = useState(false);
   const [sendingReply, setSendingReply] = useState(false);
 
   const vetNotes = counselorNotes.filter(n => n.veteranId === activeVeteranId);
+  const counselorName = currentUser?.name || 'Dr. Ananya Nair';
 
+  // Load and subscribe to chat messages
   useEffect(() => {
     loadChat();
-    const interval = setInterval(loadChat, 3500);
-    return () => clearInterval(interval);
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === `sah_chat_messages_${activeVeteranId}` || e.key === null) {
+        loadChat();
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    const interval = setInterval(loadChat, 2000);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      clearInterval(interval);
+    };
   }, [activeVeteranId]);
 
   const loadChat = async () => {
+    // 1. Check local storage first
+    let localList: any[] = [];
+    try {
+      const saved = localStorage.getItem(`sah_chat_messages_${activeVeteranId}`);
+      if (saved) {
+        localList = JSON.parse(saved);
+        if (Array.isArray(localList) && localList.length > 0) {
+          setChatMessages(localList);
+        }
+      }
+    } catch {}
+
+    // 2. Fetch from backend and merge if available
     try {
       const res = await apiService.getChatMessages(activeVeteranId);
-      if (res?.messages) {
-        setChatMessages(res.messages);
+      if (res?.messages && Array.isArray(res.messages) && res.messages.length > 0) {
+        // Merge backend messages with any newer local messages
+        const msgMap = new Map<string, any>();
+        localList.forEach(m => msgMap.set(m.id || m.content, m));
+        res.messages.forEach((m: any) => msgMap.set(m.id || m.content, m));
+        const merged = Array.from(msgMap.values()).sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        setChatMessages(merged);
+        localStorage.setItem(`sah_chat_messages_${activeVeteranId}`, JSON.stringify(merged));
+        return;
       }
-    } catch {
-      // Fallback
+    } catch {}
+
+    // 3. If empty, initialize with greeting
+    if (localList.length === 0) {
+      const initial = [DEFAULT_GREETING(counselorName)];
+      setChatMessages(initial);
+      localStorage.setItem(`sah_chat_messages_${activeVeteranId}`, JSON.stringify(initial));
     }
   };
 
@@ -44,11 +91,28 @@ export const CommunicationHubView: React.FC = () => {
     setReplyText('');
     setSendingReply(true);
 
+    const counselorMsg = {
+      id: `msg-${Date.now()}`,
+      veteran_id: activeVeteranId,
+      sender_type: 'counselor',
+      content: content,
+      created_at: new Date().toISOString(),
+    };
+
+    // Update locally and persist immediately
+    setChatMessages(prev => {
+      const updated = [...prev, counselorMsg];
+      try {
+        localStorage.setItem(`sah_chat_messages_${activeVeteranId}`, JSON.stringify(updated));
+        window.dispatchEvent(new Event('storage'));
+      } catch {}
+      return updated;
+    });
+
     try {
       await apiService.sendChatMessage(activeVeteranId, content, 'counselor');
-      await loadChat();
     } catch (err) {
-      console.warn('Error sending reply:', err);
+      console.warn('Backend sync failed, saved locally:', err);
     } finally {
       setSendingReply(false);
     }
@@ -109,7 +173,7 @@ export const CommunicationHubView: React.FC = () => {
                         <ShieldAlert className="w-3 h-3" /> Priority Emergency SOS
                       </div>
                     )}
-                    <p className="leading-relaxed">{m.content}</p>
+                    <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>
                     <span
                       className={`text-[9px] block text-right font-mono ${
                         isCounselor || isAlert ? 'text-white/75' : 'text-[#786F68]'
