@@ -11,7 +11,54 @@ export const theme = {
     body: Platform.OS === 'ios' ? 'System' : 'sans-serif',
     mono: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
+  fontSize: {
+    xs: 12,
+    sm: 14,
+    md: 16,
+    lg: 18,
+    xl: 22,
+    xxl: 26,
+    hero: 32,
+  },
+  fontWeight: {
+    regular: '400',
+    medium: '500',
+    semibold: '600',
+    bold: '700',
+    extrabold: '800',
+    black: '900',
+  },
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 20,
+    xxl: 28,
+  },
+  borderRadius: {
+    xs: 4,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 20,
+    full: 9999,
+  },
   colors: {
+    // Shortcuts for convenience
+    sand: '#FDF6EE',
+    creamBg: '#FDF6EE',
+    white: '#FFFFFF',
+    border: '#E8DCCE',
+    muted: '#786F68',
+    rustColor: '#D96B27',
+    espressoColor: '#1C1917',
+    primary: '#D96B27',
+    secondary: '#8C4A1E',
+    background: '#FDF6EE',
+    card: '#FFFFFF',
+    text: '#1C1917',
+
     // Warm Cream Canvas & Surfaces
     cream: {
       50: '#FFFFFF',
@@ -65,6 +112,13 @@ export const theme = {
 
   // Shadows
   shadows: {
+    card: {
+      shadowColor: '#282524',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 8,
+      elevation: 2,
+    },
     warm: {
       shadowColor: '#282524',
       shadowOffset: { width: 0, height: 2 },

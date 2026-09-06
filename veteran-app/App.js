@@ -412,14 +412,9 @@ export default function App() {
         flex: 1,
         width: '100%',
         maxWidth: 520,
-        marginHorizontal: 'auto',
-        minHeight: '100vh',
+        alignSelf: 'center',
+        height: '100%',
         backgroundColor: '#FFFFFF',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 20,
-        elevation: 8,
       } : { flex: 1 }}>
         <NavigationContainer>
           <StatusBar style="light" />
