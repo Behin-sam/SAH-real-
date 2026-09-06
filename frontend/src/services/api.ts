@@ -3,7 +3,18 @@
  * Communicates with FastAPI backend with auto dual-port resolution (8000 / 8001)
  */
 
-const BASE_URLS = ['http://localhost:8000/api', 'http://localhost:8001/api', 'http://127.0.0.1:8000/api'];
+const customApiUrl = (import.meta as any).env?.VITE_API_URL 
+  ? [(import.meta as any).env.VITE_API_URL.replace(/\/$/, '').endsWith('/api') 
+      ? (import.meta as any).env.VITE_API_URL.replace(/\/$/, '') 
+      : `${(import.meta as any).env.VITE_API_URL.replace(/\/$/, '')}/api`]
+  : [];
+
+const BASE_URLS = [
+  ...customApiUrl,
+  'http://localhost:8000/api',
+  'http://localhost:8001/api',
+  'http://127.0.0.1:8000/api'
+];
 let workingBaseUrl = BASE_URLS[0];
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
