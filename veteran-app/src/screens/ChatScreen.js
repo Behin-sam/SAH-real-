@@ -30,19 +30,6 @@ const DEFAULT_GREETING = (counselorName) => ({
   created_at: new Date(Date.now() - 3600000).toISOString(),
 });
 
-const generateEmpatheticResponse = (input, vetName) => {
-  const text = (input || '').toLowerCase();
-  if (text.includes('sos') || text.includes('crisis') || text.includes('emergency') || text.includes('panic') || text.includes('flashback')) {
-    return `🚨 Captain, I am right here with you. Please sit down comfortably, plant your feet firmly on the ground, and take four deep breaths with me (Inhale 4s, Hold 4s, Exhale 4s). Remember, you are safe right now in the present. If you need immediate voice support, tap the 24/7 Crisis Help button (112 / Tele-MANAS 14416).`;
-  }
-  if (text.includes('routine') || text.includes('drill') || text.includes('walk') || text.includes('done') || text.includes('ground')) {
-    return `Excellent progress, ${vetName || 'Captain'}. Maintaining routine consistency is the core pillar of trauma recovery. How are your energy and stress levels responding today?`;
-  }
-  if (text.includes('sleep') || text.includes('nightmare') || text.includes('tired') || text.includes('insomnia')) {
-    return `Thank you for sharing that with me. Rest disruptions are very common in recovery. Let's make sure you do a 10-minute 5-4-3-2-1 grounding exercise before bed tonight without screen time.`;
-  }
-  return `Message received, ${vetName || 'Captain'}. I've logged this in your clinical recovery file. Keep up your daily grounding drills, and reach out anytime you need adjustments.`;
-};
 
 const ChatScreen = ({ route, navigation }) => {
   const { user } = useAuth();
@@ -218,24 +205,7 @@ const ChatScreen = ({ route, navigation }) => {
       console.warn('Backend chat post error:', err.message);
     }
 
-    // Generate intelligent clinical supervisor auto-response after short delay
-    setTimeout(async () => {
-      const counselorReply = {
-        id: `msg-${Date.now() + 1}`,
-        veteran_id: targetVetId,
-        sender_type: 'counselor',
-        message_type: isAlert ? 'alert' : 'text',
-        content: generateEmpatheticResponse(messageContent, user?.name),
-        created_at: new Date().toISOString(),
-      };
-
-      setMessages((prev) => {
-        const withReply = [...prev, counselorReply];
-        saveToStorage(withReply);
-        return withReply;
-      });
-    }, 1000);
-
+    // Counselor will reply from their dashboard – no auto-response generated
     setSending(false);
   };
 
@@ -268,23 +238,8 @@ const ChatScreen = ({ route, navigation }) => {
               }
             } catch (err) {}
 
-            setTimeout(async () => {
-              const counselorSosReply = {
-                id: `msg-reply-${Date.now()}`,
-                veteran_id: targetVetId,
-                sender_type: 'counselor',
-                message_type: 'alert',
-                content: `🚨 Captain ${user?.name || ''}, Priority alert received. Stay seated, keep breathing steadily. Dr. Ananya Nair is reviewing your active status. One-touch help is always standing by at 112 / Tele-MANAS (14416).`,
-                created_at: new Date().toISOString(),
-              };
-              setMessages((prev) => {
-                const list = [...prev, counselorSosReply];
-                saveToStorage(list);
-                return list;
-              });
-            }, 1000);
-
-            Alert.alert('Alert Dispatched', 'Dr. Ananya Nair has received your priority clinical alert.');
+            // Counselor will see the SOS alert and respond manually from their dashboard
+            Alert.alert('Alert Dispatched', 'Dr. Ananya Nair has received your priority clinical alert. Please wait for their reply.');
           },
         },
       ]
