@@ -6,7 +6,6 @@ export const Header: React.FC = () => {
   const {
     currentUser,
     currentRole,
-    setRole,
     logout,
     currentVeteranUser,
     currentVeteranProfile,
@@ -87,34 +86,6 @@ export const Header: React.FC = () => {
             <span className="hidden sm:inline font-heading tracking-wider">24/7 CRISIS HELP</span>
             <span className="sm:hidden font-heading">HELP</span>
           </button>
-
-          {/* Role Switcher Toggle (HIDDEN IF LOGGED IN AS A VETERAN) */}
-          {!isVeteranUser && (
-            <div className="flex items-center bg-[#E8DCCE]/60 border border-[#E8DCCE] rounded-xl p-1 text-xs">
-              <button
-                onClick={() => setRole('veteran')}
-                className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                  currentRole === 'veteran'
-                    ? 'bg-[#1C1917] text-white shadow-warm'
-                    : 'text-[#786F68] hover:text-[#1C1917]'
-                }`}
-              >
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>Veteran</span>
-              </button>
-              <button
-                onClick={() => setRole('counselor')}
-                className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                  currentRole === 'counselor'
-                    ? 'bg-[#D96B27] text-white shadow-warm'
-                    : 'text-[#786F68] hover:text-[#1C1917]'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Counselor</span>
-              </button>
-            </div>
-          )}
 
           {/* Notification Icon */}
           <button

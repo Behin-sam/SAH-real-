@@ -14,6 +14,13 @@ async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_o
 
 
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.compiler import compiles
+
+
+@compiles(UUID, "sqlite")
+def compile_uuid_sqlite(type_, compiler, **kw):
+    return "CHAR(36)"
 
 
 class Base(DeclarativeBase):

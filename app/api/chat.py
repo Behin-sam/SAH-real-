@@ -143,7 +143,14 @@ async def get_direct_messages(
 ):
     """Fetch chat history between a veteran and their clinical counselor."""
     v_uuid = await _resolve_veteran_uuid(db, veteran_id)
-    c_uuid, counselor_profile = await _resolve_counselor_uuid_and_profile(db, counselor_id)
+    target_c_id = counselor_id
+    if not target_c_id:
+        v_res = await db.execute(select(VeteranProfile).where(VeteranProfile.id == v_uuid))
+        vet_row = v_res.scalar_one_or_none()
+        if vet_row and vet_row.assigned_counselor_id:
+            target_c_id = vet_row.assigned_counselor_id
+
+    c_uuid, counselor_profile = await _resolve_counselor_uuid_and_profile(db, target_c_id)
 
     # Find conversation specifically for this veteran & counselor
     result = await db.execute(
@@ -218,7 +225,23 @@ async def post_direct_message(
 ):
     """Send a direct message from either veteran or counselor."""
     v_uuid = await _resolve_veteran_uuid(db, payload.veteran_id)
-    c_uuid, counselor_profile = await _resolve_counselor_uuid_and_profile(db, payload.counselor_id)
+    v_res = await db.execute(select(VeteranProfile).where(VeteranProfile.id == v_uuid))
+    vet_row = v_res.scalar_one_or_none()
+
+    target_c_id = payload.counselor_id
+    if not target_c_id and payload.sender_type == "veteran":
+        if vet_row and vet_row.assigned_counselor_id:
+            target_c_id = vet_row.assigned_counselor_id
+
+    c_uuid, counselor_profile = await _resolve_counselor_uuid_and_profile(db, target_c_id)
+
+    # Authorization Check: If sender is counselor, verify they are authorized for this veteran
+    if payload.sender_type == "counselor":
+        if vet_row and vet_row.assigned_counselor_id:
+            assigned_c_clean = str(vet_row.assigned_counselor_id).replace("-", "").lower()
+            sent_c_clean = str(c_uuid).replace("-", "").lower()
+            if assigned_c_clean != sent_c_clean and str(vet_row.assigned_counselor_id) != str(c_uuid):
+                raise HTTPException(status_code=403, detail="Unauthorized: Counselor is not assigned to this veteran's caseload.")
 
     result = await db.execute(
         select(ChatConversation)
@@ -278,6 +301,8 @@ async def post_direct_message(
     return {
         "id": str(message.id),
         "conversation_id": str(conversation.id),
+        "veteran_id": str(v_uuid),
+        "counselor_id": str(c_uuid),
         "sender_type": message.sender_type,
         "content": message.content,
         "created_at": message.created_at.isoformat() if message.created_at else None,

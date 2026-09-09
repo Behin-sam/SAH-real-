@@ -211,19 +211,21 @@ export const apiService = {
   },
 
   // Direct Messaging
-  async getChatMessages(veteranId: string) {
-    return request<{ conversation_id: string; veteran_id: string; counselor_name: string; messages: any[] }>(
-      `/chat/messages?veteran_id=${veteranId}`
+  async getChatMessages(veteranId: string, counselorId?: string) {
+    const query = counselorId ? `&counselor_id=${encodeURIComponent(counselorId)}` : '';
+    return request<{ conversation_id: string; veteran_id: string; counselor_id: string; counselor_name: string; messages: any[] }>(
+      `/chat/messages?veteran_id=${veteranId}${query}`
     );
   },
 
-  async sendChatMessage(veteranId: string, content: string, senderType: 'veteran' | 'counselor' = 'counselor') {
+  async sendChatMessage(veteranId: string, content: string, senderType: 'veteran' | 'counselor' = 'counselor', counselorId?: string) {
     return request<any>('/chat/messages', {
       method: 'POST',
       body: JSON.stringify({
         veteran_id: veteranId,
         content,
         sender_type: senderType,
+        counselor_id: counselorId,
       }),
     });
   },
@@ -290,8 +292,9 @@ export const apiService = {
     });
   },
 
-  async getGroupMessages(groupId: string) {
-    return request<{ group_id: string; messages: any[] }>(`/groups/${groupId}/messages`);
+  async getGroupMessages(groupId: string, veteranId?: string) {
+    const query = veteranId ? `?veteran_id=${encodeURIComponent(veteranId)}` : '';
+    return request<{ group_id: string; messages: any[] }>(`/groups/${groupId}/messages${query}`);
   },
 
   async postGroupMessage(groupId: string, params: { sender_id: string; message: string; cheer_type?: string; sender_name?: string; sender_rank?: string }) {
@@ -302,6 +305,29 @@ export const apiService = {
   async likeGroupMessage(groupId: string, messageId: string, veteranId?: string) {
     const query = veteranId ? `?veteran_id=${encodeURIComponent(veteranId)}` : '';
     return request<any>(`/groups/${groupId}/messages/${messageId}/like${query}`, { method: 'POST' });
+  },
+
+  async getSquadTasks(groupId: string, veteranId?: string, status?: string) {
+    const params = new URLSearchParams();
+    if (veteranId) params.append('veteran_id', veteranId);
+    if (status) params.append('status', status);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<{ group_id: string; tasks: any[]; active_tasks_count: number; max_active_tasks: number; total: number }>(
+      `/groups/${groupId}/tasks${query}`
+    );
+  },
+
+  async createSquadTask(groupId: string, data: { title: string; description?: string; created_by: string; assigned_to: string; task_type?: string; points?: number }) {
+    return request<any>(`/groups/${groupId}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async completeSquadTask(groupId: string, taskId: string, veteranId: string) {
+    return request<any>(`/groups/${groupId}/tasks/${taskId}/complete?veteran_id=${encodeURIComponent(veteranId)}`, {
+      method: 'POST',
+    });
   },
 
   async createGroupActivity(groupId: string, data: { title: string; description?: string; activity_type?: string; points_per_participant?: number; created_by?: string; scheduled_at?: string; duration_minutes?: number }) {

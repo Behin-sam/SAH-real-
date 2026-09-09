@@ -42,7 +42,7 @@ export const CommunicationHubView: React.FC = () => {
    */
   const loadChatFromBackend = async () => {
     try {
-      const res = await apiService.getChatMessages(activeVeteranId);
+      const res = await apiService.getChatMessages(activeVeteranId, currentUser?.id);
       if (res?.messages && Array.isArray(res.messages)) {
         // Sort oldest → newest
         const sorted = [...res.messages].sort(
@@ -85,7 +85,7 @@ export const CommunicationHubView: React.FC = () => {
 
     try {
       // Post to backend — this is the only real shared channel
-      await apiService.sendChatMessage(activeVeteranId, content, 'counselor');
+      await apiService.sendChatMessage(activeVeteranId, content, 'counselor', currentUser?.id);
       // Re-fetch from backend so we get the real message ID
       await loadChatFromBackend();
     } catch (err) {

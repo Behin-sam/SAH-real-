@@ -172,14 +172,28 @@ export const groupAPI = {
   },
 
   // Squad Cheer Board Messages
-  getMessages: async (groupId) => {
-    const res = await api.get(`/groups/${groupId}/messages`);
+  getMessages: async (groupId, veteranId = null) => {
+    const res = await api.get(`/groups/${groupId}/messages`, { params: veteranId ? { veteran_id: veteranId } : {} });
     return res?.messages || (Array.isArray(res) ? res : []);
   },
 
   postMessage: (groupId, data) => api.post(`/groups/${groupId}/messages`, null, { params: data }),
 
-  likeMessage: (groupId, messageId) => api.post(`/groups/${groupId}/messages/${messageId}/like`),
+  likeMessage: (groupId, messageId, veteranId = null) =>
+    api.post(`/groups/${groupId}/messages/${messageId}/like`, null, { params: veteranId ? { veteran_id: veteranId } : {} }),
+
+  // Squad Tasks (5 active max)
+  getTasks: (groupId, veteranId = null, status = null) => {
+    const params = {};
+    if (veteranId) params.veteran_id = veteranId;
+    if (status) params.status = status;
+    return api.get(`/groups/${groupId}/tasks`, { params });
+  },
+
+  createTask: (groupId, data) => api.post(`/groups/${groupId}/tasks`, data),
+
+  completeTask: (groupId, taskId, veteranId) =>
+    api.post(`/groups/${groupId}/tasks/${taskId}/complete`, null, { params: { veteran_id: veteranId } }),
 };
 
 // ─── Social Interaction Endpoints ─────────────────────────────────────────────

@@ -634,11 +634,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveScreen('home');
   };
 
-  // Role locking logic: if user is logged in as a veteran, prevent setting role to counselor!
+  // Strict Role locking logic: Prevents unauthorized role switching across authenticated sessions
   const setRole = (targetRole: UserRole) => {
-    if (currentUser && currentUser.role === 'veteran' && targetRole === 'counselor') {
-      alert('Access Denied: Veterans cannot access the Clinical Counselor Portal.');
-      return;
+    if (currentUser) {
+      if (currentUser.role === 'veteran' && targetRole === 'counselor') {
+        alert('Access Denied: Veterans cannot access the Clinical Counselor Portal.');
+        return;
+      }
+      if (currentUser.role === 'counselor' && targetRole === 'veteran') {
+        alert('Access Denied: Clinical Specialists cannot switch to the Veteran interface from within the portal.');
+        return;
+      }
     }
     setCurrentRole(targetRole);
     if (targetRole === 'counselor') {

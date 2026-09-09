@@ -36,6 +36,7 @@ from app.models.gamified import (
     GroupActivityParticipant,
     GroupMessage,
     GroupMessageLike,
+    SquadTask,
     PointsLedger,
     SocialInteraction,
     GroupRole,
@@ -549,16 +550,39 @@ async def award_member_points(
     }
 
 
-# ─── Squad Cheer Board & Messaging ──────────────────────────────────────────
+# ─── Squad Chat & Cheer Board ───────────────────────────────────────────────
+
+class PostGroupMessageRequest(BaseModel):
+    sender_id: Any = None
+    message: str
+    cheer_type: str = "cheer"
+    sender_name: str | None = None
+    sender_rank: str | None = None
+
 
 @router.get("/api/groups/{group_id}/messages")
 async def list_group_messages(
     group_id: str,
+    veteran_id: Any = Query(None),
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    """List recent squad cheer board messages."""
+    """List recent squad cheer board messages with membership verification."""
     g_uuid = await _resolve_group_uuid(db, group_id)
+
+    # If veteran_id is provided, verify active squad membership
+    if veteran_id:
+        v_uuid = await _resolve_veteran_uuid(db, veteran_id)
+        mem_res = await db.execute(
+            select(GroupMembership).where(
+                GroupMembership.group_id == g_uuid,
+                GroupMembership.veteran_id == v_uuid,
+                GroupMembership.is_active == True,
+            )
+        )
+        if not mem_res.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="Access denied: You must be an enlisted member of this squad to access squad chat.")
+
     result = await db.execute(
         select(GroupMessage)
         .where(GroupMessage.group_id == g_uuid)
@@ -587,19 +611,40 @@ async def list_group_messages(
 @router.post("/api/groups/{group_id}/messages", status_code=201)
 async def post_group_message(
     group_id: str,
+    req: PostGroupMessageRequest | None = None,
     sender_id: Any = Query(None),
-    message: str = Query(None),
+    message: str | None = Query(None),
     cheer_type: str = Query("cheer"),
     sender_name: str | None = Query(None),
     sender_rank: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Post an encouragement cheer to the squad board and earn +5 XP."""
+    """Post a message to the squad board (members only) and earn +5 XP."""
     g_uuid = await _resolve_group_uuid(db, group_id)
-    s_uuid = await _resolve_veteran_uuid(db, sender_id)
+    raw_sender = (req.sender_id if req and req.sender_id is not None else sender_id)
+    raw_msg = (req.message if req else message)
+    raw_cheer = (req.cheer_type if req else cheer_type) or "cheer"
+    raw_name = (req.sender_name if req else sender_name)
+    raw_rank = (req.sender_rank if req else sender_rank)
 
-    name = sender_name
-    rank = sender_rank
+    if not raw_msg or not raw_msg.strip():
+        raise HTTPException(status_code=400, detail="Message content cannot be empty")
+
+    s_uuid = await _resolve_veteran_uuid(db, raw_sender)
+
+    # Verify sender is active member of this squad
+    mem_res = await db.execute(
+        select(GroupMembership).where(
+            GroupMembership.group_id == g_uuid,
+            GroupMembership.veteran_id == s_uuid,
+            GroupMembership.is_active == True,
+        )
+    )
+    if not mem_res.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Access denied: You must be an enlisted member of this squad to post messages.")
+
+    name = raw_name
+    rank = raw_rank
     if not name:
         res = await db.execute(
             select(VeteranProfile, SurvivorProfile)
@@ -617,8 +662,8 @@ async def post_group_message(
         sender_id=s_uuid,
         sender_name=name or "Comrade",
         sender_rank=rank or "Soldier",
-        message=message or "Hold the line! 💪",
-        cheer_type=cheer_type or "cheer",
+        message=raw_msg.strip(),
+        cheer_type=raw_cheer,
     )
     db.add(new_msg)
 
@@ -629,16 +674,262 @@ async def post_group_message(
         db.add(PointsLedger(
             veteran_id=s_uuid,
             points=5,
-            reason="Posted squad cheer message",
+            reason="Posted squad message",
             category="peer_support",
         ))
 
     await db.commit()
 
     return {
-        "message": "Cheer posted to squad board! 💬",
+        "message": "Message posted to squad board! 💬",
         "points_earned": 5,
         "message_id": str(new_msg.id),
+        "created_at": new_msg.created_at.isoformat() if new_msg.created_at else None,
+    }
+
+
+# ─── Squad Tasks (Hard Cap: 5 Active Tasks per Squad) ───────────────────────
+
+class CreateSquadTaskRequest(BaseModel):
+    title: str
+    description: str | None = None
+    created_by: Any = None
+    assigned_to: Any = None
+    task_type: str = "physical"
+    points: int = 20
+
+
+@router.get("/api/groups/{group_id}/tasks")
+async def list_squad_tasks(
+    group_id: str,
+    veteran_id: Any = Query(None),
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List squad tasks with membership security check."""
+    g_uuid = await _resolve_group_uuid(db, group_id)
+
+    if veteran_id:
+        v_uuid = await _resolve_veteran_uuid(db, veteran_id)
+        mem_res = await db.execute(
+            select(GroupMembership).where(
+                GroupMembership.group_id == g_uuid,
+                GroupMembership.veteran_id == v_uuid,
+                GroupMembership.is_active == True,
+            )
+        )
+        if not mem_res.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="Access denied: You must be an enlisted squad member to view squad tasks.")
+
+    query = select(SquadTask).where(SquadTask.group_id == g_uuid)
+    if status:
+        query = query.where(SquadTask.status == status)
+    query = query.order_by(SquadTask.created_at.desc())
+
+    result = await db.execute(query)
+    tasks = result.scalars().all()
+
+    # Enrich with names
+    enriched = []
+    for t in tasks:
+        creator_name = "Squad Leader"
+        c_res = await db.execute(
+            select(VeteranProfile, SurvivorProfile)
+            .outerjoin(SurvivorProfile, VeteranProfile.survivor_id == SurvivorProfile.id)
+            .where(VeteranProfile.id == t.created_by)
+        )
+        c_row = c_res.first()
+        if c_row:
+            vet, surv = c_row
+            creator_name = (surv.preferred_language if (surv and surv.preferred_language and len(surv.preferred_language) > 2) else None) or vet.rank or "Squad Leader"
+
+        assignee_name = "Comrade"
+        a_res = await db.execute(
+            select(VeteranProfile, SurvivorProfile)
+            .outerjoin(SurvivorProfile, VeteranProfile.survivor_id == SurvivorProfile.id)
+            .where(VeteranProfile.id == t.assigned_to)
+        )
+        a_row = a_res.first()
+        if a_row:
+            vet, surv = a_row
+            assignee_name = (surv.preferred_language if (surv and surv.preferred_language and len(surv.preferred_language) > 2) else None) or vet.rank or "Comrade"
+
+        enriched.append({
+            "id": str(t.id),
+            "group_id": str(t.group_id),
+            "title": t.title,
+            "description": t.description,
+            "task_type": t.task_type,
+            "points": t.points,
+            "status": t.status,
+            "created_by": str(t.created_by),
+            "creator_name": creator_name,
+            "assigned_to": str(t.assigned_to),
+            "assignee_name": assignee_name,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+        })
+
+    active_count = sum(1 for t in tasks if t.status == "active")
+    return {
+        "group_id": str(g_uuid),
+        "tasks": enriched,
+        "active_tasks_count": active_count,
+        "max_active_tasks": 5,
+        "total": len(enriched),
+    }
+
+
+@router.post("/api/groups/{group_id}/tasks", status_code=201)
+async def create_squad_task(
+    group_id: str,
+    payload: CreateSquadTaskRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a squad task assigned to a squad member. Enforces hard cap of 5 active tasks."""
+    g_uuid = await _resolve_group_uuid(db, group_id)
+    c_uuid = await _resolve_veteran_uuid(db, payload.created_by)
+    a_uuid = await _resolve_veteran_uuid(db, payload.assigned_to)
+
+    if not payload.title or not payload.title.strip():
+        raise HTTPException(status_code=400, detail="Task title is required")
+
+    # 1. Verify creator is active squad member (or leader)
+    c_mem = await db.execute(
+        select(GroupMembership).where(
+            GroupMembership.group_id == g_uuid,
+            GroupMembership.veteran_id == c_uuid,
+            GroupMembership.is_active == True,
+        )
+    )
+    if not c_mem.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Access denied: Creator must be an active member of this squad.")
+
+    # 2. Verify assignee is active member of THIS squad
+    a_mem = await db.execute(
+        select(GroupMembership).where(
+            GroupMembership.group_id == g_uuid,
+            GroupMembership.veteran_id == a_uuid,
+            GroupMembership.is_active == True,
+        )
+    )
+    if not a_mem.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Cannot assign task: Assigned veteran is not a member of this squad.")
+
+    # 3. Hard Cap Check: Maximum 5 active squad tasks per squad
+    active_count_res = await db.execute(
+        select(func.count(SquadTask.id)).where(
+            SquadTask.group_id == g_uuid,
+            SquadTask.status == "active",
+        )
+    )
+    active_count = active_count_res.scalar() or 0
+    if active_count >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Squad task limit reached. Maximum 5 active tasks allowed per squad. Complete or remove an existing task before creating another.",
+        )
+
+    task = SquadTask(
+        group_id=g_uuid,
+        created_by=c_uuid,
+        assigned_to=a_uuid,
+        title=payload.title.strip(),
+        description=payload.description.strip() if payload.description else None,
+        task_type=payload.task_type or "physical",
+        points=payload.points or 20,
+        status="active",
+    )
+    db.add(task)
+    await db.commit()
+
+    return {
+        "id": str(task.id),
+        "group_id": str(task.group_id),
+        "title": task.title,
+        "description": task.description,
+        "assigned_to": str(task.assigned_to),
+        "created_by": str(task.created_by),
+        "points": task.points,
+        "status": task.status,
+        "active_tasks_count": active_count + 1,
+        "message": f"Squad task '{task.title}' assigned! 🎯",
+    }
+
+
+@router.post("/api/groups/{group_id}/tasks/{task_id}/complete")
+async def complete_squad_task(
+    group_id: str,
+    task_id: str,
+    veteran_id: Any = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Complete a squad task and award points."""
+    g_uuid = await _resolve_group_uuid(db, group_id)
+    v_uuid = await _resolve_veteran_uuid(db, veteran_id)
+    t_uuid = None
+    try:
+        t_uuid = uuid.UUID(str(task_id))
+    except Exception:
+        pass
+
+    task_res = await db.execute(
+        select(SquadTask).where(
+            SquadTask.id == t_uuid if t_uuid else False,
+            SquadTask.group_id == g_uuid,
+        )
+    )
+    task = task_res.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Squad task not found")
+
+    if task.status == "completed":
+        return {"message": "Task already completed", "status": "completed", "points_earned": 0}
+
+    # Only assignee or squad admin can complete
+    if task.assigned_to != v_uuid:
+        mem_res = await db.execute(
+            select(GroupMembership).where(
+                GroupMembership.group_id == g_uuid,
+                GroupMembership.veteran_id == v_uuid,
+                GroupMembership.role == GroupRole.ADMIN,
+                GroupMembership.is_active == True,
+            )
+        )
+        if not mem_res.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="Access denied: Only the assigned comrade or squad admin can complete this task.")
+
+    now = datetime.now(timezone.utc)
+    task.status = "completed"
+    task.completed_at = now
+
+    # Award points to assignee
+    pts = task.points or 20
+    vet_res = await db.execute(select(VeteranProfile).where(VeteranProfile.id == task.assigned_to))
+    assignee = vet_res.scalar_one_or_none()
+    if assignee:
+        assignee.total_points = (assignee.total_points or 0) + pts
+        db.add(PointsLedger(
+            veteran_id=task.assigned_to,
+            points=pts,
+            reason=f"Completed squad task: {task.title}",
+            category="squad_task",
+        ))
+
+    # Update group total points
+    grp_res = await db.execute(select(VeteranGroup).where(VeteranGroup.id == g_uuid))
+    grp = grp_res.scalar_one_or_none()
+    if grp:
+        grp.total_group_points = (grp.total_group_points or 0) + pts
+        grp.activities_completed = (grp.activities_completed or 0) + 1
+
+    await db.commit()
+
+    return {
+        "id": str(task.id),
+        "status": "completed",
+        "points_earned": pts,
+        "message": f"Squad task '{task.title}' completed! +{pts} XP awarded! 🎖️",
     }
 
 

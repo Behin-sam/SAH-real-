@@ -417,6 +417,37 @@ class GroupMessageLike(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class SquadTask(Base):
+    """Squad task created by squad leaders/members and assigned to specific squad comrades.
+    
+    Hard-capped at 5 active (non-completed/cancelled) tasks per squad.
+    """
+    __tablename__ = "squad_tasks"
+    __table_args__ = (
+        Index("ix_squad_task_group_status", "group_id", "status"),
+        Index("ix_squad_task_assigned_to", "assigned_to"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("veteran_groups.id"), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("veteran_profiles.id"), nullable=False)
+    assigned_to = Column(UUID(as_uuid=True), ForeignKey("veteran_profiles.id"), nullable=False)
+
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    task_type = Column(String(50), default="physical")
+    points = Column(Integer, default=20)
+    status = Column(String(30), default="active")  # "active", "completed", "cancelled"
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    group = relationship("VeteranGroup")
+    creator = relationship("VeteranProfile", foreign_keys=[created_by])
+    assignee = relationship("VeteranProfile", foreign_keys=[assigned_to])
+
+
 
 # ─── Points & Rewards ─────────────────────────────────────────────────────────
 

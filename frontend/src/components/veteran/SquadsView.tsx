@@ -71,6 +71,22 @@ interface MemberItem {
   has_finished_task?: boolean;
 }
 
+interface SquadTaskItem {
+  id: string;
+  group_id: string;
+  title: string;
+  description?: string;
+  task_type?: string;
+  points: number;
+  status: string;
+  created_by: string;
+  created_by_name?: string;
+  assigned_to: string;
+  assigned_to_name?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
 export const SquadsView: React.FC = () => {
   const {
     activeVeteranId,
@@ -89,11 +105,15 @@ export const SquadsView: React.FC = () => {
 
   // Selected squad detail modal / hub
   const [selectedSquad, setSelectedSquad] = useState<GroupItem | null>(null);
-  const [squadTab, setSquadTab] = useState<'activities' | 'cheer' | 'roster'>('activities');
+  const [squadTab, setSquadTab] = useState<'tasks' | 'activities' | 'cheer' | 'roster'>('tasks');
   const [squadActivities, setSquadActivities] = useState<ActivityItem[]>([]);
   const [squadMessages, setSquadMessages] = useState<MessageItem[]>([]);
   const [squadMembers, setSquadMembers] = useState<MemberItem[]>([]);
+  const [squadTasks, setSquadTasks] = useState<SquadTaskItem[]>([]);
+  const [activeTaskCount, setActiveTaskCount] = useState<number>(0);
+  const [maxActiveTasks, setMaxActiveTasks] = useState<number>(5);
   const [loadingSquadDetails, setLoadingSquadDetails] = useState<boolean>(false);
+  const [taskError, setTaskError] = useState<string | null>(null);
 
   // Cheer Board Input
   const [cheerInput, setCheerInput] = useState<string>('');
@@ -112,12 +132,14 @@ export const SquadsView: React.FC = () => {
   const [newTaskDesc, setNewTaskDesc] = useState<string>('');
   const [newTaskType, setNewTaskType] = useState<string>('Physical');
   const [newTaskPoints, setNewTaskPoints] = useState<number>(20);
+  const [newTaskAssignee, setNewTaskAssignee] = useState<string>('');
   const [creatingTask, setCreatingTask] = useState<boolean>(false);
 
   // Local actions tracking
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [joinedActivities, setJoinedActivities] = useState<Record<string, boolean>>({});
   const [completedActivities, setCompletedActivities] = useState<Record<string, boolean>>({});
+  const [completingTaskId, setCompletingTaskId] = useState<string | null>(null);
   const [awardingMemberId, setAwardingMemberId] = useState<string | null>(null);
 
   const vetId = activeVeteranId || (currentUser?.id && currentUser.id.includes('-') ? currentUser.id : '550e8400-e29b-41d4-a716-446655440001');
@@ -144,23 +166,43 @@ export const SquadsView: React.FC = () => {
   // Load detailed squad data when modal opens
   const openSquadHub = async (squad: GroupItem) => {
     setSelectedSquad(squad);
-    setSquadTab('activities');
+    setSquadTab('tasks');
     setLoadingSquadDetails(true);
+    setTaskError(null);
 
     try {
-      const [actRes, msgRes, memRes] = await Promise.all([
+      const [actRes, msgRes, memRes, taskRes] = await Promise.all([
         apiService.getGroupActivities(squad.id).catch(() => ({ activities: [] })),
-        apiService.getGroupMessages(squad.id).catch(() => ({ messages: [] })),
-        apiService.getGroupMembers(squad.id).catch(() => ({ members: [] }))
+        apiService.getGroupMessages(squad.id, vetId).catch(() => ({ messages: [] })),
+        apiService.getGroupMembers(squad.id).catch(() => ({ members: [] })),
+        apiService.getSquadTasks(squad.id, vetId).catch(() => ({ tasks: [], active_tasks_count: 0, max_active_tasks: 5, total: 0, group_id: squad.id }))
       ]);
 
       setSquadActivities(actRes?.activities || []);
       setSquadMessages(msgRes?.messages || []);
-      setSquadMembers(memRes?.members || []);
+      const members = memRes?.members || [];
+      setSquadMembers(members);
+      if (members.length > 0 && !newTaskAssignee) {
+        setNewTaskAssignee(members[0].veteran_id || vetId);
+      }
+      setSquadTasks(taskRes?.tasks || []);
+      setActiveTaskCount(taskRes?.active_tasks_count ?? (taskRes?.tasks || []).filter((t: any) => t.status === 'active').length);
+      setMaxActiveTasks(taskRes?.max_active_tasks || 5);
     } catch (err) {
       console.warn('Error loading squad hub data:', err);
     } finally {
       setLoadingSquadDetails(false);
+    }
+  };
+
+  const reloadSquadTasks = async (groupId: string) => {
+    try {
+      const taskRes = await apiService.getSquadTasks(groupId, vetId);
+      setSquadTasks(taskRes?.tasks || []);
+      setActiveTaskCount(taskRes?.active_tasks_count ?? 0);
+      setMaxActiveTasks(taskRes?.max_active_tasks || 5);
+    } catch (err) {
+      console.warn('Error reloading tasks:', err);
     }
   };
 
@@ -368,32 +410,56 @@ export const SquadsView: React.FC = () => {
     }
   };
 
-  // Squad Leader: Create a task/activity for squad members
+  // Squad Leader / Member: Create a task for squad members
   const handleCreateSquadTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim() || !selectedSquad || creatingTask) return;
     setCreatingTask(true);
+    setTaskError(null);
+
+    const targetAssignee = newTaskAssignee || vetId;
+
     try {
-      await apiService.createGroupActivity(selectedSquad.id, {
+      await apiService.createSquadTask(selectedSquad.id, {
         title: newTaskTitle.trim(),
-        description: newTaskDesc.trim() || 'Squad drill assigned by squad leader.',
-        activity_type: newTaskType.toLowerCase(),
-        points_per_participant: newTaskPoints,
+        description: newTaskDesc.trim() || 'Squad task assigned to comrade.',
+        task_type: newTaskType.toLowerCase(),
+        points: newTaskPoints,
         created_by: vetId,
-        scheduled_at: new Date(Date.now() + 86400000).toISOString(), // tomorrow
-        duration_minutes: 30,
+        assigned_to: targetAssignee,
       });
-      // Refresh activities
-      const actRes = await apiService.getGroupActivities(selectedSquad.id).catch(() => ({ activities: [] }));
-      setSquadActivities(actRes?.activities || []);
+
+      // Reload tasks from backend
+      await reloadSquadTasks(selectedSquad.id);
       setShowCreateTaskModal(false);
       setNewTaskTitle('');
       setNewTaskDesc('');
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Create squad task error:', err);
-      alert('Could not create task. Make sure you are the squad admin.');
+      const msg = err?.message || 'Could not create task. Squad task limit of 5 active tasks reached or unauthorized.';
+      setTaskError(msg);
+      alert(msg);
     } finally {
       setCreatingTask(false);
+    }
+  };
+
+  // Complete Squad Task
+  const handleCompleteSquadTask = async (task: SquadTaskItem) => {
+    if (!selectedSquad || completingTaskId) return;
+    setCompletingTaskId(task.id);
+    setTaskError(null);
+
+    try {
+      const res = await apiService.completeSquadTask(selectedSquad.id, task.id, vetId);
+      const earned = res?.points_earned || task.points || 20;
+      awardXP(earned, `Completed squad task: ${task.title}`);
+      await reloadSquadTasks(selectedSquad.id);
+    } catch (err: any) {
+      console.warn('Complete squad task error:', err);
+      alert(err?.message || 'Failed to complete squad task.');
+    } finally {
+      setCompletingTaskId(null);
     }
   };
 
@@ -529,8 +595,8 @@ export const SquadsView: React.FC = () => {
                       <span className="text-[10px] text-[#786F68]">Squad XP</span>
                     </div>
                     <div>
-                      <span className="block text-xs font-bold text-[#1C1917]">3</span>
-                      <span className="text-[10px] text-[#786F68]">Drills</span>
+                      <span className="block text-xs font-bold text-[#1C1917]">5 Max</span>
+                      <span className="text-[10px] text-[#786F68]">Active Tasks</span>
                     </div>
                   </div>
                 </div>
@@ -562,7 +628,7 @@ export const SquadsView: React.FC = () => {
         </div>
       )}
 
-      {/* SQUAD HUB MODAL (Activities, Cheer Board, Roster) */}
+      {/* SQUAD HUB MODAL (Tasks, Activities, Cheer Board, Roster) */}
       {selectedSquad && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white border border-[#E8DCCE] rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -609,6 +675,17 @@ export const SquadsView: React.FC = () => {
             {/* Modal Tabs */}
             <div className="px-6 pt-3 bg-[#FDF6EE] border-b border-[#E8DCCE] flex items-center gap-6">
               <button
+                onClick={() => setSquadTab('tasks')}
+                className={`pb-3 text-xs font-bold flex items-center gap-1.5 border-b-2 transition-all ${
+                  squadTab === 'tasks'
+                    ? 'border-[#D96B27] text-[#D96B27]'
+                    : 'border-transparent text-[#786F68] hover:text-[#1C1917]'
+                }`}
+              >
+                <Award className="w-4 h-4" />
+                Squad Tasks ({activeTaskCount}/{maxActiveTasks} Active)
+              </button>
+              <button
                 onClick={() => setSquadTab('activities')}
                 className={`pb-3 text-xs font-bold flex items-center gap-1.5 border-b-2 transition-all ${
                   squadTab === 'activities'
@@ -617,7 +694,7 @@ export const SquadsView: React.FC = () => {
                 }`}
               >
                 <Activity className="w-4 h-4" />
-                Drills & Challenges ({squadActivities.length})
+                Drills ({squadActivities.length})
               </button>
               <button
                 onClick={() => setSquadTab('cheer')}
@@ -628,7 +705,7 @@ export const SquadsView: React.FC = () => {
                 }`}
               >
                 <MessageCircle className="w-4 h-4" />
-                Cheer Board ({squadMessages.length})
+                Squad Chat ({squadMessages.length})
               </button>
               <button
                 onClick={() => setSquadTab('roster')}
@@ -647,22 +724,137 @@ export const SquadsView: React.FC = () => {
             <div className="p-6 overflow-y-auto flex-1 bg-white space-y-4">
               {loadingSquadDetails ? (
                 <div className="py-12 text-center text-sm text-[#786F68]">Loading squad dispatch...</div>
+              ) : squadTab === 'tasks' ? (
+                /* TAB 0: SQUAD TASKS (WITH 5-TASK CAP & ASSIGNEES) */
+                <div className="space-y-4">
+                  {/* Task Cap Warning / Header Banner */}
+                  <div className="flex items-center justify-between p-3.5 bg-[#FDF6EE] border border-[#E8DCCE] rounded-2xl">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-[#1C1917]">Squad Task Capacity:</span>
+                        <span className={`text-xs font-extrabold px-2 py-0.5 rounded-full ${
+                          activeTaskCount >= maxActiveTasks
+                            ? 'bg-rose-100 text-rose-800'
+                            : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          {activeTaskCount} / {maxActiveTasks} Active Tasks
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#786F68]">
+                        {activeTaskCount >= maxActiveTasks
+                          ? 'Squad task limit reached. Complete an active task before creating another.'
+                          : `You can add up to ${maxActiveTasks - activeTaskCount} more active task(s) to this squad.`}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => setShowCreateTaskModal(true)}
+                      disabled={activeTaskCount >= maxActiveTasks}
+                      className="px-3.5 py-2 rounded-xl bg-[#D96B27] hover:bg-[#C55A1A] disabled:bg-[#E8DCCE] disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Assign Task
+                    </button>
+                  </div>
+
+                  {taskError && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
+                      {taskError}
+                    </div>
+                  )}
+
+                  {/* Tasks List */}
+                  {squadTasks.length === 0 ? (
+                    <div className="py-12 text-center">
+                      <Award className="w-10 h-10 text-[#D96B27] mx-auto mb-2 opacity-50" />
+                      <h4 className="text-xs font-bold text-[#1C1917]">No squad tasks created yet</h4>
+                      <p className="text-[11px] text-[#786F68] mt-1">
+                        Create a squad task and assign it to a fellow comrade in your squad!
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {squadTasks.map((task) => {
+                        const isAssignedToMe = task.assigned_to === vetId;
+                        const isCompleted = task.status === 'completed';
+                        const isCompleting = completingTaskId === task.id;
+
+                        return (
+                          <div
+                            key={task.id}
+                            className={`border rounded-2xl p-4 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                              isCompleted
+                                ? 'bg-slate-50/70 border-slate-200 opacity-80'
+                                : isAssignedToMe
+                                ? 'bg-[#FDF2E9]/40 border-[#EEBD9B]'
+                                : 'bg-white border-[#E8DCCE]'
+                            }`}
+                          >
+                            <div className="space-y-1.5 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="px-2 py-0.5 rounded bg-[#FDF2E9] text-[#D96B27] text-[10px] font-bold uppercase">
+                                  {task.task_type || 'GENERAL'}
+                                </span>
+                                <span className="text-xs font-extrabold text-[#D96B27]">
+                                  +{task.points} XP
+                                </span>
+                                {isAssignedToMe && (
+                                  <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold">
+                                    Assigned to You
+                                  </span>
+                                )}
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  isCompleted ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {isCompleted ? 'Completed' : 'Active'}
+                                </span>
+                              </div>
+
+                              <h4 className="text-sm font-bold text-[#1C1917]">{task.title}</h4>
+                              {task.description && (
+                                <p className="text-xs text-[#786F68] leading-relaxed">{task.description}</p>
+                              )}
+
+                              <div className="flex items-center gap-4 text-[11px] text-[#786F68] pt-1">
+                                <span>
+                                  Assigned to: <strong className="text-[#1C1917]">{task.assigned_to_name || 'Comrade'}</strong>
+                                </span>
+                                <span>
+                                  By: <strong className="text-[#1C1917]">{task.created_by_name || 'Squad Member'}</strong>
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 flex items-center gap-2">
+                              {isCompleted ? (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                                  <CheckCircle2 className="w-4 h-4" />
+                                  Completed
+                                </span>
+                              ) : isAssignedToMe ? (
+                                <button
+                                  onClick={() => handleCompleteSquadTask(task)}
+                                  disabled={isCompleting}
+                                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-[#E8DCCE] text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  {isCompleting ? 'Completing...' : 'Mark Done (+XP)'}
+                                </button>
+                              ) : (
+                                <span className="text-xs text-[#786F68] font-medium bg-[#F5EBE0] px-3 py-1.5 rounded-xl">
+                                  Pending Comrade
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               ) : squadTab === 'activities' ? (
                 /* TAB 1: DRILLS & CHALLENGES */
                 <div className="space-y-3">
-                  {/* Squad Leader: Create Drill button */}
-                  {(() => {
-                    const myMembership = squadMembers.find(m => m.veteran_id === vetId);
-                    const isAdmin = myMembership?.role === 'admin' || myMembership?.role === 'leader';
-                    return isAdmin ? (
-                      <button
-                        onClick={() => setShowCreateTaskModal(true)}
-                        className="w-full py-2.5 px-4 rounded-xl border-2 border-dashed border-[#D96B27]/50 text-[#D96B27] text-xs font-bold hover:bg-[#FDF2E9] transition-all flex items-center justify-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" /> Create New Squad Drill / Task
-                      </button>
-                    ) : null;
-                  })()}
                   {squadActivities.length === 0 ? (
                     <div className="py-10 text-center text-xs text-[#786F68]">
                       No active drills scheduled for this squad. Check back soon!
@@ -733,13 +925,13 @@ export const SquadsView: React.FC = () => {
                   )}
                 </div>
               ) : squadTab === 'cheer' ? (
-                /* TAB 2: CHEER BOARD */
+                /* TAB 2: SQUAD CHAT */
                 <div className="space-y-4">
                   {/* Cheer Input */}
                   <div className="bg-[#FDF6EE] border border-[#E8DCCE] rounded-2xl p-3 flex items-center gap-2">
                     <input
                       type="text"
-                      placeholder="Dispatch a word of strength to your comrades..."
+                      placeholder="Dispatch a message to your squad members..."
                       value={cheerInput}
                       onChange={(e) => setCheerInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handlePostCheer()}
@@ -973,70 +1165,89 @@ export const SquadsView: React.FC = () => {
         </div>
       )}
 
-      {/* CREATE SQUAD DRILL / TASK MODAL (Squad Leaders Only) */}
+      {/* CREATE SQUAD TASK MODAL (With Member Assignment & Hard Cap validation) */}
       {showCreateTaskModal && selectedSquad && (
         <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
           <div className="bg-white border border-[#E8DCCE] rounded-2xl max-w-md w-full shadow-2xl">
             <div className="p-5 border-b border-[#E8DCCE] flex items-center justify-between">
-              <h3 className="text-sm font-extrabold text-[#1C1917]">Create Squad Drill / Task</h3>
+              <h3 className="text-sm font-extrabold text-[#1C1917]">Assign Squad Task</h3>
               <button onClick={() => setShowCreateTaskModal(false)} className="text-[#786F68] hover:text-[#1C1917]">✕</button>
             </div>
             <form onSubmit={handleCreateSquadTask} className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-[#1C1917] mb-1">Drill / Task Title *</label>
+                <label className="block text-xs font-bold text-[#1C1917] mb-1">Task Title *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. 2km Morning Walk, Meditation Session..."
+                  placeholder="e.g. Complete 3km recovery walk, Grounding breathwork..."
                   value={newTaskTitle}
                   onChange={(e) => setNewTaskTitle(e.target.value)}
                   className="w-full px-3 py-2 text-xs bg-[#FDF6EE] border border-[#E8DCCE] rounded-xl text-[#1C1917] focus:outline-none focus:ring-2 focus:ring-[#D96B27]/40"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-[#1C1917] mb-1">Task Type</label>
+                <label className="block text-xs font-bold text-[#1C1917] mb-1">Assign to Squad Member *</label>
+                <select
+                  value={newTaskAssignee || vetId}
+                  onChange={(e) => setNewTaskAssignee(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-[#FDF6EE] border border-[#E8DCCE] rounded-xl text-[#1C1917] focus:outline-none focus:ring-2 focus:ring-[#D96B27]/40"
+                >
+                  {squadMembers.map((m) => (
+                    <option key={m.veteran_id} value={m.veteran_id}>
+                      {m.name} ({m.rank || 'Soldier'}) {m.veteran_id === vetId ? '— (You)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-[#1C1917] mb-1">Task Category</label>
                 <select
                   value={newTaskType}
                   onChange={(e) => setNewTaskType(e.target.value)}
                   className="w-full px-3 py-2 text-xs bg-[#FDF6EE] border border-[#E8DCCE] rounded-xl text-[#1C1917] focus:outline-none focus:ring-2 focus:ring-[#D96B27]/40"
                 >
-                  <option value="Physical">Physical Fitness</option>
-                  <option value="Mental">Mental Wellness</option>
-                  <option value="Social">Social Activity</option>
-                  <option value="Nature">Nature / Outdoors</option>
+                  <option value="Physical">Physical Fitness / Walking</option>
+                  <option value="Mental">Mental Resilience / Grounding</option>
+                  <option value="Social">Social Connection</option>
+                  <option value="Check-in">Daily Check-in</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-[#1C1917] mb-1">XP Reward per Member</label>
+                <label className="block text-xs font-bold text-[#1C1917] mb-1">XP Reward on Completion</label>
                 <select
                   value={newTaskPoints}
                   onChange={(e) => setNewTaskPoints(Number(e.target.value))}
                   className="w-full px-3 py-2 text-xs bg-[#FDF6EE] border border-[#E8DCCE] rounded-xl text-[#1C1917] focus:outline-none focus:ring-2 focus:ring-[#D96B27]/40"
                 >
-                  <option value={10}>10 XP (Easy)</option>
-                  <option value={20}>20 XP (Standard)</option>
+                  <option value={10}>10 XP (Quick Drill)</option>
+                  <option value={20}>20 XP (Standard Drill)</option>
                   <option value={30}>30 XP (Challenge)</option>
-                  <option value={50}>50 XP (Mission)</option>
+                  <option value={50}>50 XP (Major Milestone)</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-[#1C1917] mb-1">Description (optional)</label>
+                <label className="block text-xs font-bold text-[#1C1917] mb-1">Instructions / Description</label>
                 <textarea
                   rows={2}
-                  placeholder="Instructions or goals for this drill..."
+                  placeholder="Details or guidelines for the assigned comrade..."
                   value={newTaskDesc}
                   onChange={(e) => setNewTaskDesc(e.target.value)}
                   className="w-full px-3 py-2 text-xs bg-[#FDF6EE] border border-[#E8DCCE] rounded-xl text-[#1C1917] focus:outline-none focus:ring-2 focus:ring-[#D96B27]/40 resize-none"
                 />
               </div>
+
+              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
+                ⚡ <strong>Cap rule:</strong> Maximum 5 active tasks allowed at any time. Completing a task frees up space.
+              </div>
+
               <div className="flex items-center justify-end gap-2">
                 <button type="button" onClick={() => setShowCreateTaskModal(false)} className="px-4 py-2 rounded-xl text-xs font-bold text-[#786F68] hover:bg-[#F5EBE0]">Cancel</button>
                 <button
                   type="submit"
-                  disabled={!newTaskTitle.trim() || creatingTask}
+                  disabled={!newTaskTitle.trim() || creatingTask || activeTaskCount >= maxActiveTasks}
                   className="px-5 py-2 rounded-xl bg-[#D96B27] hover:bg-[#C55A1A] disabled:bg-[#E8DCCE] text-white text-xs font-bold shadow-sm"
                 >
-                  {creatingTask ? 'Creating...' : 'Deploy Drill'}
+                  {creatingTask ? 'Assigning...' : 'Assign Squad Task'}
                 </button>
               </div>
             </form>
@@ -1046,3 +1257,4 @@ export const SquadsView: React.FC = () => {
     </div>
   );
 };
+
