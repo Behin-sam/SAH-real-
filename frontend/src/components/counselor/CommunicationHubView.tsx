@@ -1,14 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { MessageCircle, Send, ShieldAlert } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { MessageCircle, Send, ShieldAlert, WifiOff, RefreshCw } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { apiService } from '../../services/api';
-
-const DEFAULT_GREETING = (counselorName: string) => ({
-  id: 'msg-init-counselor',
-  sender_type: 'counselor',
-  content: `Hello! I'm ${counselorName || 'Dr. Ananya Nair'}, your clinical supervisor. Feel free to reach out here anytime for support, grounding guidance, or care plan adjustments.`,
-  created_at: new Date(Date.now() - 3600000).toISOString(),
-});
 
 export const CommunicationHubView: React.FC = () => {
   const { currentVeteranUser, counselorNotes, addCounselorNote, activeVeteranId, currentUser } = useApp();
@@ -16,64 +9,53 @@ export const CommunicationHubView: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [replyText, setReplyText] = useState('');
   const [sendingReply, setSendingReply] = useState(false);
+  const [backendOnline, setBackendOnline] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const vetNotes = counselorNotes.filter(n => n.veteranId === activeVeteranId);
   const counselorName = currentUser?.name || 'Dr. Ananya Nair';
 
-  // Load and subscribe to chat messages
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   useEffect(() => {
-    loadChat();
+    scrollToBottom();
+  }, [chatMessages]);
 
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === `sah_chat_messages_${activeVeteranId}` || e.key === null) {
-        loadChat();
-      }
-    };
+  // Poll backend every 3 seconds — backend is the single source of truth
+  useEffect(() => {
+    setLoading(true);
+    setChatMessages([]);
+    loadChatFromBackend();
 
-    window.addEventListener('storage', handleStorage);
-    const interval = setInterval(loadChat, 2000);
-
-    return () => {
-      window.removeEventListener('storage', handleStorage);
-      clearInterval(interval);
-    };
+    const interval = setInterval(loadChatFromBackend, 3000);
+    return () => clearInterval(interval);
   }, [activeVeteranId]);
 
-  const loadChat = async () => {
-    // 1. Check local storage first
-    let localList: any[] = [];
-    try {
-      const saved = localStorage.getItem(`sah_chat_messages_${activeVeteranId}`);
-      if (saved) {
-        localList = JSON.parse(saved);
-        if (Array.isArray(localList) && localList.length > 0) {
-          setChatMessages(localList);
-        }
-      }
-    } catch {}
-
-    // 2. Fetch from backend and merge if available
+  /**
+   * Fetch messages from backend ONLY.
+   * localStorage is NOT a shared channel between two different browser origins
+   * (veteran app on port 8081 vs counselor dashboard on port 5173 have completely
+   * separate localStorage). The backend DB is the only real shared store.
+   */
+  const loadChatFromBackend = async () => {
     try {
       const res = await apiService.getChatMessages(activeVeteranId);
-      if (res?.messages && Array.isArray(res.messages) && res.messages.length > 0) {
-        // Merge backend messages with any newer local messages
-        const msgMap = new Map<string, any>();
-        localList.forEach(m => msgMap.set(m.id || m.content, m));
-        res.messages.forEach((m: any) => msgMap.set(m.id || m.content, m));
-        const merged = Array.from(msgMap.values()).sort(
+      if (res?.messages && Array.isArray(res.messages)) {
+        // Sort oldest → newest
+        const sorted = [...res.messages].sort(
           (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
-        setChatMessages(merged);
-        localStorage.setItem(`sah_chat_messages_${activeVeteranId}`, JSON.stringify(merged));
-        return;
+        setChatMessages(sorted);
+        setBackendOnline(true);
       }
-    } catch {}
-
-    // 3. If empty, initialize with greeting
-    if (localList.length === 0) {
-      const initial = [DEFAULT_GREETING(counselorName)];
-      setChatMessages(initial);
-      localStorage.setItem(`sah_chat_messages_${activeVeteranId}`, JSON.stringify(initial));
+    } catch (err) {
+      // Backend unreachable — keep whatever messages we already have in state
+      setBackendOnline(false);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -91,28 +73,24 @@ export const CommunicationHubView: React.FC = () => {
     setReplyText('');
     setSendingReply(true);
 
-    const counselorMsg = {
-      id: `msg-${Date.now()}`,
+    // Optimistic UI: show the message immediately
+    const optimisticMsg = {
+      id: `msg-optimistic-${Date.now()}`,
       veteran_id: activeVeteranId,
       sender_type: 'counselor',
-      content: content,
+      content,
       created_at: new Date().toISOString(),
     };
-
-    // Update locally and persist immediately
-    setChatMessages(prev => {
-      const updated = [...prev, counselorMsg];
-      try {
-        localStorage.setItem(`sah_chat_messages_${activeVeteranId}`, JSON.stringify(updated));
-        window.dispatchEvent(new Event('storage'));
-      } catch {}
-      return updated;
-    });
+    setChatMessages(prev => [...prev, optimisticMsg]);
 
     try {
+      // Post to backend — this is the only real shared channel
       await apiService.sendChatMessage(activeVeteranId, content, 'counselor');
+      // Re-fetch from backend so we get the real message ID
+      await loadChatFromBackend();
     } catch (err) {
-      console.warn('Backend sync failed, saved locally:', err);
+      console.warn('Backend send failed:', err);
+      setBackendOnline(false);
     } finally {
       setSendingReply(false);
     }
@@ -132,25 +110,49 @@ export const CommunicationHubView: React.FC = () => {
         </div>
       </div>
 
+      {/* Backend offline banner */}
+      {!backendOnline && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold">
+          <WifiOff className="w-4 h-4 shrink-0" />
+          <span>Backend server unreachable. Messages will appear once the server is back online.</span>
+          <button
+            onClick={loadChatFromBackend}
+            className="ml-auto flex items-center gap-1 underline hover:no-underline"
+          >
+            <RefreshCw className="w-3 h-3" /> Retry
+          </button>
+        </div>
+      )}
+
       {/* Live Direct Messaging Thread */}
       <div className="p-6 rounded-2xl glass-panel space-y-4 shadow-warm border border-[#E8DCCE]">
         <div className="flex items-center justify-between border-b border-[#E8DCCE] pb-3">
           <div>
             <h2 className="font-heading text-xl font-bold text-[#1C1917] flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className={`w-2.5 h-2.5 rounded-full ${backendOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
               Live Direct Thread: {currentVeteranUser.name}
             </h2>
-            <p className="text-[11px] text-[#786F68] mt-0.5">Direct messages synced with veteran's mobile app.</p>
+            <p className="text-[11px] text-[#786F68] mt-0.5">
+              {backendOnline
+                ? 'Synced with backend · polling every 3s'
+                : 'Offline — waiting for server connection'}
+            </p>
           </div>
           <span className="label-overline text-[10px] text-[#8C4A1E] bg-[#F7DFCC] px-2.5 py-1 rounded-full font-bold">
             HIPAA-Protected
           </span>
         </div>
 
-        <div className="h-64 overflow-y-auto space-y-3 p-4 bg-[#FDF6EE] rounded-xl border border-[#E8DCCE]">
-          {chatMessages.length === 0 ? (
+        {/* Message list */}
+        <div className="h-72 overflow-y-auto space-y-3 p-4 bg-[#FDF6EE] rounded-xl border border-[#E8DCCE]">
+          {loading ? (
             <div className="h-full flex items-center justify-center text-xs text-[#786F68]">
-              No messages in this thread yet. Send a greeting below!
+              <RefreshCw className="w-4 h-4 animate-spin mr-2" /> Loading messages…
+            </div>
+          ) : chatMessages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center gap-2 text-xs text-[#786F68]">
+              <MessageCircle className="w-8 h-8 opacity-30" />
+              <span>No messages yet. Send a greeting to start the conversation.</span>
             </div>
           ) : (
             chatMessages.map((m, idx) => {
@@ -159,6 +161,10 @@ export const CommunicationHubView: React.FC = () => {
 
               return (
                 <div key={m.id || idx} className={`flex flex-col ${isCounselor ? 'items-end' : 'items-start'}`}>
+                  {/* Sender label */}
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-[#A08A7A] mb-0.5 px-1">
+                    {isCounselor ? counselorName : currentVeteranUser.name}
+                  </span>
                   <div
                     className={`max-w-[80%] p-3.5 rounded-2xl text-xs space-y-1 ${
                       isAlert
@@ -186,6 +192,8 @@ export const CommunicationHubView: React.FC = () => {
               );
             })
           )}
+          {/* Auto-scroll anchor */}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* Reply form */}
@@ -194,7 +202,7 @@ export const CommunicationHubView: React.FC = () => {
             type="text"
             value={replyText}
             onChange={e => setReplyText(e.target.value)}
-            placeholder={`Reply to ${currentVeteranUser.name}...`}
+            placeholder={`Reply to ${currentVeteranUser.name}…`}
             className="flex-1 bg-[#FDF6EE] border border-[#E8DCCE] rounded-xl px-4 py-2.5 text-xs text-[#1C1917] focus:outline-none focus:border-[#D96B27]"
           />
           <button
@@ -202,7 +210,12 @@ export const CommunicationHubView: React.FC = () => {
             disabled={!replyText.trim() || sendingReply}
             className="px-5 py-2.5 rounded-xl bg-[#D96B27] hover:bg-[#C55A1A] disabled:opacity-40 text-white font-extrabold text-xs shadow-rust flex items-center gap-1.5 font-heading tracking-wider"
           >
-            <Send className="w-4 h-4" /> Reply
+            {sendingReply ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}{' '}
+            Reply
           </button>
         </form>
       </div>
